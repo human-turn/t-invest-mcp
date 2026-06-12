@@ -15,6 +15,7 @@ import {
   orderDirectionToJSON,
   orderTypeToJSON,
   orderExecutionReportStatusToJSON,
+  operationTypeToJSON,
 } from "@tinkoff/invest-js";
 import { getClient, config } from "../client.js";
 import { getInstrumentRef } from "../instruments-cache.js";
@@ -29,6 +30,7 @@ import {
   notifyProgress,
   withRateLimitRetry,
   computeChunks,
+  mapPool,
   type ProgressCtx,
 } from "../helpers.js";
 import { outputParams, deliver } from "../output.js";
@@ -43,6 +45,8 @@ const RO = {
 const MAX_CANDLES = 1500;
 const MAX_SEARCH_RESULTS = 30;
 const OPERATIONS_PAGE = 1000;
+const OPERATIONS_MAX_PAGES = 10_000; // backstop against a non-advancing cursor (10M operations)
+const ENRICH_CONCURRENCY = 8; // cap parallel getInstrumentBy fan-out on large batches
 
 const CANDLE_INTERVALS = {
   "1min": CandleInterval.CANDLE_INTERVAL_1_MIN,
@@ -77,42 +81,12 @@ async function priceUnit(uid: string): Promise<"percent_of_nominal" | "points" |
   return "currency";
 }
 
-/** Numeric gRPC operation type → readable enum name */
-const OP_TYPE_MAP: Record<number, string> = {
-  0: "UNSPECIFIED", 1: "INPUT", 2: "BOND_TAX", 3: "OUTPUT_SECURITIES",
-  4: "OVERNIGHT", 5: "TAX", 6: "BOND_REPAYMENT_FULL", 7: "SELL_CARD",
-  8: "DIVIDEND_TAX", 9: "OUTPUT", 10: "BOND_REPAYMENT", 11: "TAX_CORRECTION",
-  12: "SERVICE_FEE", 13: "BENEFIT_TAX", 14: "MARGIN_FEE", 15: "BUY",
-  16: "BUY_CARD", 17: "INPUT_SECURITIES", 18: "SELL_MARGIN", 19: "BROKER_FEE",
-  20: "BUY_MARGIN", 21: "DIVIDEND", 22: "SELL", 23: "COUPON",
-  24: "SUCCESS_FEE", 25: "DIVIDEND_TRANSFER", 26: "ACCRUING_VARMARGIN",
-  27: "WRITING_OFF_VARMARGIN", 28: "DELIVERY_BUY", 29: "DELIVERY_SELL",
-  30: "TRACK_MFEE", 31: "TRACK_PFEE", 32: "TAX_PROGRESSIVE",
-  33: "BOND_TAX_PROGRESSIVE", 34: "DIVIDEND_TAX_PROGRESSIVE",
-  35: "BENEFIT_TAX_PROGRESSIVE", 36: "TAX_CORRECTION_PROGRESSIVE",
-  37: "TAX_REPO_PROGRESSIVE", 38: "TAX_REPO", 39: "TAX_REPO_HOLD",
-  40: "TAX_REPO_REFUND", 41: "TAX_REPO_HOLD_PROGRESSIVE",
-  42: "TAX_REPO_REFUND_PROGRESSIVE", 43: "DIV_EXT",
-  44: "TAX_CORRECTION_COUPON", 45: "CASH_FEE", 46: "OUT_FEE",
-  50: "OUTPUT_SWIFT", 51: "INPUT_SWIFT", 53: "OUTPUT_ACQUIRING",
-  54: "INPUT_ACQUIRING", 55: "OUTPUT_PENALTY", 56: "ADVICE_FEE",
-  57: "TRANS_IIS_BS", 58: "TRANS_BS_BS", 59: "OUT_MULTI",
-  60: "INP_MULTI", 61: "OVER_PLACEMENT", 62: "OVER_COM",
-  63: "OVER_INCOME", 64: "OPTION_EXPIRATION", 65: "FUTURE_EXPIRATION",
-};
-
-function normalizeOpType(type: string | number): string {
-  if (typeof type === "number") return OP_TYPE_MAP[type] ?? String(type);
-  if (typeof type === "string" && type.startsWith("OPERATION_TYPE_")) return type.slice(15);
-  return String(type);
-}
-
 type OperationRow = Record<string, unknown>;
 
 function mapOperation(op: {
   id: string;
   name: string;
-  type: string | number;
+  type: number;
   date?: Date | string | undefined;
   instrumentUid: string;
   instrumentType: string;
@@ -124,7 +98,7 @@ function mapOperation(op: {
   return {
     id: op.id,
     name: op.name,
-    type: normalizeOpType(op.type),
+    type: enumLabel(operationTypeToJSON, op.type, "OPERATION_TYPE_"),
     date: toMsk(op.date),
     instrumentUid: op.instrumentUid,
     instrumentType: op.instrumentType,
@@ -184,23 +158,21 @@ export function registerReadTools(server: McpServer): void {
           currency: PortfolioRequest_CurrencyRequest.RUB,
         });
 
-        const positions = await Promise.all(
-          (response.positions ?? []).map(async (p) => {
-            const ref = await getInstrumentRef(p.instrumentUid);
-            return {
-              instrumentUid: p.instrumentUid,
-              ticker: ref?.ticker ?? "",
-              name: ref?.name ?? "",
-              instrumentType: p.instrumentType,
-              quantity: toNumber(p.quantity),
-              lot: ref?.lot ?? 1,
-              averagePrice: toNumber(p.averagePositionPrice),
-              currentPrice: toNumber(p.currentPrice),
-              currency: p.averagePositionPrice?.currency ?? "rub",
-              accruedInterest: toNumber(p.currentNkd),
-            };
-          }),
-        );
+        const positions = await mapPool(response.positions ?? [], ENRICH_CONCURRENCY, async (p) => {
+          const ref = await getInstrumentRef(p.instrumentUid);
+          return {
+            instrumentUid: p.instrumentUid,
+            ticker: ref?.ticker ?? "",
+            name: ref?.name ?? "",
+            instrumentType: p.instrumentType,
+            quantity: toNumber(p.quantity),
+            lot: ref?.lot ?? 1,
+            averagePrice: toNumber(p.averagePositionPrice),
+            currentPrice: toNumber(p.currentPrice),
+            currency: p.averagePositionPrice?.currency ?? "rub",
+            accruedInterest: toNumber(p.currentNkd),
+          };
+        });
 
         const totalPortfolio = toNumber(response.totalAmountPortfolio);
         // API returns portfolio-level expectedYield as a percentage (11.78 = +11.78%)
@@ -230,14 +202,14 @@ export function registerReadTools(server: McpServer): void {
     {
       title: "Get Operations",
       description:
-        "Executed account operations (trades, dividends, coupons, taxes, fees) with cursor pagination. Default period: last 365 days. With outputPath the server automatically fetches ALL pages to the end of the period and writes the full history to the file.",
+        "Executed account operations (trades, dividends, coupons, taxes, fees) with cursor pagination. Default period: last 365 days. With outputPath the server fetches ALL pages from the start of the period (the cursor arg is ignored in file mode) and writes the full history to the file.",
       inputSchema: {
         accountId: z.string().describe("Account ID from get_accounts"),
         instrumentId: z.string().optional().describe("Filter by instrument UID"),
         from: z.string().optional().describe("Period start, ISO 8601 (default: 1 year ago)"),
         to: z.string().optional().describe("Period end, ISO 8601 (default: now)"),
         limit: z.number().int().min(1).max(1000).default(100).describe("Page size (inline mode)"),
-        cursor: z.string().optional().describe("Cursor from the previous response (nextCursor)"),
+        cursor: z.string().optional().describe("Cursor from the previous response (nextCursor); inline mode only, ignored with outputPath"),
         ...outputParams,
       },
       annotations: RO,
@@ -259,11 +231,10 @@ export function registerReadTools(server: McpServer): void {
         };
 
         if (outputPath) {
-          // file mode: drain the cursor to capture the complete history
+          // file mode: drain from the START of the period (ignore inline cursor) to capture the complete history
           const items: OperationRow[] = [];
-          let pageCursor = cursor ?? "";
-          let page = 0;
-          for (;;) {
+          let pageCursor = "";
+          for (let page = 1; page <= OPERATIONS_MAX_PAGES; page++) {
             const response = await withRateLimitRetry(() =>
               getClient().operations.getOperationsByCursor({
                 ...baseRequest,
@@ -272,14 +243,14 @@ export function registerReadTools(server: McpServer): void {
               }),
             );
             items.push(...response.items.map(mapOperation));
-            page++;
             await notifyProgress(
               extra as unknown as ProgressCtx,
               page,
               undefined,
               `operations: page ${page}, ${items.length} items`,
             );
-            if (!response.hasNext) break;
+            // stop on hasNext=false OR a cursor that did not advance (guards against an infinite loop)
+            if (!response.hasNext || !response.nextCursor || response.nextCursor === pageCursor) break;
             pageCursor = response.nextCursor;
           }
           return await deliver({ items }, items, { outputPath, outputFormat }, {
@@ -419,20 +390,18 @@ export function registerReadTools(server: McpServer): void {
         });
         // API silently drops/empties unknown UIDs — key the response off the request instead
         const byUid = new Map(lastPrices.filter((lp) => lp.instrumentUid).map((lp) => [lp.instrumentUid, lp]));
-        const rows = await Promise.all(
-          instrumentIds.map(async (id) => {
-            const lp = byUid.get(id);
-            return lp
-              ? {
-                  instrumentUid: id,
-                  found: true,
-                  price: toNumber(lp.price),
-                  priceUnit: await priceUnit(id),
-                  time: toMsk(lp.time),
-                }
-              : { instrumentUid: id, found: false };
-          }),
-        );
+        const rows = await mapPool(instrumentIds, ENRICH_CONCURRENCY, async (id) => {
+          const lp = byUid.get(id);
+          return lp
+            ? {
+                instrumentUid: id,
+                found: true,
+                price: toNumber(lp.price),
+                priceUnit: await priceUnit(id),
+                time: toMsk(lp.time),
+              }
+            : { instrumentUid: id, found: false };
+        });
         return await deliver(rows, rows, { outputPath, outputFormat });
       } catch (e) {
         return fail(e);
@@ -458,12 +427,34 @@ export function registerReadTools(server: McpServer): void {
       try {
         const fromD = parseDate(from, daysFromNow(-365));
         const toD = parseDate(to, new Date());
+        if (fromD.getTime() >= toD.getTime()) {
+          return fail(new Error(`'from' (${toMsk(fromD)}) must be before 'to' (${toMsk(toD)})`));
+        }
 
-        let rawCandles;
+        const mapCandle = (c: {
+          time?: Date | string;
+          open?: unknown;
+          high?: unknown;
+          low?: unknown;
+          close?: unknown;
+          volume: number | string;
+        }) => ({
+          time: toMsk(c.time),
+          open: toNumber(c.open as never),
+          high: toNumber(c.high as never),
+          low: toNumber(c.low as never),
+          close: toNumber(c.close as never),
+          volume: c.volume,
+        });
+
+        let mapped: ReturnType<typeof mapCandle>[];
         if (outputPath) {
-          // file mode: chunk the range to respect per-request limits and fetch everything
+          // file mode: chunk the range to respect per-request limits and fetch everything.
+          // Chunk boundaries are shared (chunk[i].to === chunk[i+1].from) and GetCandles is
+          // inclusive on `to`, so dedup the boundary candle by its timestamp.
           const chunks = computeChunks(fromD, toD, INTERVAL_MAX_DAYS[interval]);
-          rawCandles = [];
+          mapped = [];
+          const seen = new Set<string>();
           for (let i = 0; i < chunks.length; i++) {
             const part = await withRateLimitRetry(() =>
               getClient().marketdata.getCandles({
@@ -473,31 +464,29 @@ export function registerReadTools(server: McpServer): void {
                 interval: CANDLE_INTERVALS[interval],
               }),
             );
-            rawCandles.push(...part.candles);
+            for (const c of part.candles) {
+              const row = mapCandle(c);
+              if (seen.has(row.time)) continue; // drop duplicate at the shared chunk boundary
+              seen.add(row.time);
+              mapped.push(row);
+            }
             await notifyProgress(
               extra as unknown as ProgressCtx,
               i + 1,
               chunks.length,
-              `candles: chunk ${i + 1}/${chunks.length}, ${rawCandles.length} total`,
+              `candles: chunk ${i + 1}/${chunks.length}, ${mapped.length} total`,
             );
           }
         } else {
-          ({ candles: rawCandles } = await getClient().marketdata.getCandles({
+          const { candles } = await getClient().marketdata.getCandles({
             instrumentId,
             from: fromD,
             to: toD,
             interval: CANDLE_INTERVALS[interval],
-          }));
+          });
+          mapped = candles.map(mapCandle);
         }
 
-        const mapped = rawCandles.map((c) => ({
-          time: toMsk(c.time),
-          open: toNumber(c.open),
-          high: toNumber(c.high),
-          low: toNumber(c.low),
-          close: toNumber(c.close),
-          volume: c.volume,
-        }));
         const unit = await priceUnit(instrumentId);
 
         if (outputPath) {
@@ -854,25 +843,23 @@ export function registerReadTools(server: McpServer): void {
     async ({ accountId, outputPath, outputFormat }) => {
       try {
         const { orders } = await getClient().orders.getOrders({ accountId });
-        const rows = await Promise.all(
-          orders.map(async (o) => {
-            const ref = await getInstrumentRef(o.instrumentUid);
-            return {
-              orderId: o.orderId,
-              instrumentUid: o.instrumentUid,
-              ticker: ref?.ticker ?? "",
-              name: ref?.name ?? "",
-              direction: enumLabel(orderDirectionToJSON, o.direction, "ORDER_DIRECTION_"),
-              orderType: enumLabel(orderTypeToJSON, o.orderType, "ORDER_TYPE_"),
-              status: enumLabel(orderExecutionReportStatusToJSON, o.executionReportStatus, "EXECUTION_REPORT_STATUS_"),
-              lotsRequested: o.lotsRequested,
-              lotsExecuted: o.lotsExecuted,
-              initialPrice: toNumber(o.initialSecurityPrice),
-              totalAmount: toNumber(o.totalOrderAmount),
-              orderDate: toMsk(o.orderDate),
-            };
-          }),
-        );
+        const rows = await mapPool(orders, ENRICH_CONCURRENCY, async (o) => {
+          const ref = await getInstrumentRef(o.instrumentUid);
+          return {
+            orderId: o.orderId,
+            instrumentUid: o.instrumentUid,
+            ticker: ref?.ticker ?? "",
+            name: ref?.name ?? "",
+            direction: enumLabel(orderDirectionToJSON, o.direction, "ORDER_DIRECTION_"),
+            orderType: enumLabel(orderTypeToJSON, o.orderType, "ORDER_TYPE_"),
+            status: enumLabel(orderExecutionReportStatusToJSON, o.executionReportStatus, "EXECUTION_REPORT_STATUS_"),
+            lotsRequested: o.lotsRequested,
+            lotsExecuted: o.lotsExecuted,
+            initialPrice: toNumber(o.initialSecurityPrice),
+            totalAmount: toNumber(o.totalOrderAmount),
+            orderDate: toMsk(o.orderDate),
+          };
+        });
         return await deliver(rows, rows, { outputPath, outputFormat });
       } catch (e) {
         return fail(e);

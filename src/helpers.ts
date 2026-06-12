@@ -7,13 +7,17 @@ export function toNumber(q: Quotation | MoneyValue | undefined | null): number {
   return Number(v.toFixed(9));
 }
 
-/** number → Quotation */
+/** number → Quotation (carries a rounded-up nano into units so |nano| stays ≤ 999_999_999) */
 export function toQuotation(value: number): Quotation {
   const sign = value < 0 ? -1 : 1;
   const abs = Math.abs(value);
-  const units = Math.floor(abs) * sign;
-  const nano = Math.round((abs - Math.floor(abs)) * 1_000_000_000) * sign;
-  return { units, nano };
+  let units = Math.floor(abs);
+  let nano = Math.round((abs - units) * 1_000_000_000);
+  if (nano >= 1_000_000_000) {
+    units += 1;
+    nano -= 1_000_000_000;
+  }
+  return { units: units * sign, nano: nano * sign };
 }
 
 /** number + currency → MoneyValue */
@@ -21,11 +25,31 @@ export function toMoneyValue(value: number, currency: string): MoneyValue {
   return { ...toQuotation(value), currency };
 }
 
-/** Date/string → ISO string in Moscow time with explicit offset */
+// Single reusable formatter (creating one per call is the costly part of toLocaleString)
+const MSK_FMT = new Intl.DateTimeFormat("sv-SE", {
+  timeZone: "Europe/Moscow",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+
+/** Date/string → ISO string in Moscow wall-time with the ACTUAL offset for that date (UTC+4/DST before 2014) */
 export function toMsk(d: Date | string | undefined | null): string {
   if (!d) return "";
   const date = typeof d === "string" ? new Date(d) : d;
-  return date.toLocaleString("sv-SE", { timeZone: "Europe/Moscow" }).replace(" ", "T") + "+03:00";
+  if (isNaN(date.getTime())) return "";
+  const wall = MSK_FMT.format(date).replace(" ", "T"); // "2026-06-12T13:58:22"
+  // offset = (wall interpreted as UTC) − actual instant; correct for any historical MSK offset
+  const offsetMin = Math.round((Date.parse(wall + "Z") - date.getTime()) / 60_000);
+  const sign = offsetMin < 0 ? "-" : "+";
+  const abs = Math.abs(offsetMin);
+  const hh = String(Math.floor(abs / 60)).padStart(2, "0");
+  const mm = String(abs % 60).padStart(2, "0");
+  return `${wall}${sign}${hh}:${mm}`;
 }
 
 /** ts-proto enum decoder → readable label: enumLabel(accountTypeToJSON, 2, "ACCOUNT_TYPE_") → "TINKOFF_IIS" */
@@ -99,6 +123,19 @@ export async function withRateLimitRetry<T>(fn: () => Promise<T>, retries = 2, b
       throw e;
     }
   }
+}
+
+/** Map over items with bounded concurrency (caps parallel gRPC fan-out on large batches) */
+export async function mapPool<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (let i = next++; i < items.length; i = next++) {
+      out[i] = await fn(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
 }
 
 /** Minimal shape of the SDK's request handler `extra` we need for progress */

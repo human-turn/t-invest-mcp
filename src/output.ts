@@ -1,4 +1,4 @@
-import { mkdir, writeFile, realpath } from "node:fs/promises";
+import { mkdir, writeFile, realpath, lstat, open, unlink } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { ok, type ToolResult } from "./helpers.js";
@@ -41,12 +41,31 @@ async function resolveSafe(rel: string): Promise<string> {
   if (realParent !== realRoot && !realParent.startsWith(realRoot + path.sep)) {
     throw new Error("outputPath escapes the output root via a symlink");
   }
-  return path.join(realParent, path.basename(target));
+  const finalPath = path.join(realParent, path.basename(target));
+  // Refuse to write THROUGH a symlink at the final component (it could point outside the root)
+  try {
+    if ((await lstat(finalPath)).isSymbolicLink()) {
+      throw new Error("outputPath refers to a symlink — refusing to write through it");
+    }
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; // non-existent target is fine
+  }
+  return finalPath;
 }
 
 export function toCsv(rows: Record<string, unknown>[]): string {
   if (!rows.length) return "";
-  const cols = Object.keys(rows[0]);
+  // Union of keys across ALL rows — heterogeneous rows (e.g. found/not-found) keep every column
+  const cols: string[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    for (const k of Object.keys(row)) {
+      if (!seen.has(k)) {
+        seen.add(k);
+        cols.push(k);
+      }
+    }
+  }
   const esc = (v: unknown): string => {
     if (v == null) return "";
     const s = typeof v === "object" ? JSON.stringify(v) : String(v);
@@ -63,6 +82,40 @@ export async function writeRaw(rel: string, body: string): Promise<{ savedTo: st
 }
 
 /**
+ * Streaming writer for large outputs: write chunks incrementally so peak memory stays small.
+ * close() returns total bytes; remove() deletes the file (e.g. on rollback / empty result).
+ */
+export async function createSafeWriter(rel: string): Promise<{
+  savedTo: string;
+  write: (chunk: string) => Promise<void>;
+  close: () => Promise<number>;
+  remove: () => Promise<void>;
+}> {
+  const file = await resolveSafe(rel);
+  const fh = await open(file, "w");
+  let bytes = 0;
+  let closed = false;
+  return {
+    savedTo: file,
+    write: async (chunk) => {
+      const buf = Buffer.from(chunk, "utf8");
+      await fh.write(buf);
+      bytes += buf.length;
+    },
+    close: async () => {
+      if (!closed) {
+        closed = true;
+        await fh.close();
+      }
+      return bytes;
+    },
+    remove: async () => {
+      await unlink(file).catch(() => {});
+    },
+  };
+}
+
+/**
  * Deliver a tool result: inline (with a size hint) or to a file with a compact summary.
  * `rows` is the flat array used for csv and record counting; null = csv unsupported.
  */
@@ -75,8 +128,11 @@ export async function deliver(
   if (!out.outputPath) {
     const res = ok(data);
     if (res.content[0].text.length > HINT_THRESHOLD) {
-      res.content[0].text +=
-        "\n\nNOTE: large response — pass outputPath to write it to a file and keep the context clean.";
+      // separate content item — keeps content[0].text valid JSON for programmatic consumers
+      res.content.push({
+        type: "text",
+        text: "NOTE: large response — pass outputPath to write it to a file and keep the context clean.",
+      });
     }
     return res;
   }
@@ -85,8 +141,9 @@ export async function deliver(
   if (format === "csv" && !rows) {
     throw new Error("csv is not supported for this tool's nested response — use outputFormat: json");
   }
+  // compact JSON for files (pretty-print can double memory / hit V8's string length cap on big data)
   const body =
-    format === "csv" ? toCsv(rows as Record<string, unknown>[]) + "\n" : JSON.stringify(data, null, 2) + "\n";
+    format === "csv" ? toCsv(rows as Record<string, unknown>[]) + "\n" : JSON.stringify(data) + "\n";
   const { savedTo, bytes } = await writeRaw(out.outputPath, body);
 
   return ok({
