@@ -1,11 +1,11 @@
-# Главное демо для шапки README: два вопроса на естественном языке, TUI-стиль.
+# Главное демо для шапки README: вопросы на естественном языке + покупка с подтверждением.
 # Рендер из корня репо: vhs docs/vhs/demo-main.tape
 Output docs/demo.gif
 
 Set Shell bash
 Set FontSize 15
 Set Width 1000
-Set Height 600
+Set Height 640
 Set Padding 12
 Set TypingSpeed 55ms
 
@@ -22,4 +22,11 @@ Sleep 4.5s
 Type "какие купоны и дивиденды придут в ближайшие 3 месяца?"
 Sleep 700ms
 Enter
-Sleep 5.5s
+Sleep 5s
+Type "докупи 2 лота SBER по рынку"
+Sleep 700ms
+Enter
+Sleep 3.4s
+Sleep 4.5s
+Enter
+Sleep 10s
