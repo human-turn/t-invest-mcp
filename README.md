@@ -3,7 +3,7 @@
 **Твой портфель Т-Инвестиций — в диалоге с AI.**
 
 MCP-сервер, который подключает Claude (Claude Code, Claude Desktop — и любой другой
-MCP-клиент) к [T-Invest API](https://developer.tinkoff.ru/invest/). Смотри портфель,
+MCP-клиент) к [T-Invest API](https://developer.tbank.ru/invest/). Смотри портфель,
 анализируй бумаги, считай выплаты и ребалансировку — обычными фразами, на русском.
 
 ![Демо: вопросы про портфель на естественном языке](docs/demo.gif)
