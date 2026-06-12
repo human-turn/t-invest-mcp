@@ -4,6 +4,8 @@ export const config = {
   token: process.env.TINKOFF_API_TOKEN ?? "",
   sandbox: process.env.TINKOFF_SANDBOX === "true",
   allowTrading: process.env.TINKOFF_ALLOW_TRADING === "true",
+  /** Human confirmation (MCP elicitation) before each trade; opt out with TINKOFF_CONFIRM=off */
+  confirm: process.env.TINKOFF_CONFIRM !== "off",
 } as const;
 
 let client: TTechApiClient | undefined;
