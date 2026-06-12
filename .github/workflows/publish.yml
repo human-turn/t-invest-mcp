@@ -1,0 +1,26 @@
+name: Publish to npm
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  id-token: write # OIDC: trusted publishing + provenance
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # trusted publishing требует npm >= 11.5.1 (Node 22 несёт npm 10 — будет 404)
+          node-version: 24.x
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      # prepublishOnly соберёт dist; первый релиз — по NPM_TOKEN, после настройки
+      # Trusted Publisher на npmjs.com строку env удалить (перейдёт на OIDC)
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
