@@ -47,6 +47,29 @@ claude mcp add t-invest \
 }
 ```
 
+### Подтверждение сделок (ask-правила)
+
+MCP tool annotations (`destructiveHint` и др.) — лишь подсказки: Claude Code не учитывает их
+при выдаче разрешений. Если включаете `TINKOFF_ALLOW_TRADING=true`, добавьте в
+`.claude/settings.json` проекта `ask`-правила — они имеют приоритет над `allow`
+(порядок: deny → ask → allow) и форсируют подтверждение человеком **в любом режиме,
+включая `bypassPermissions`**:
+
+```json
+{
+  "permissions": {
+    "allow": ["mcp__t-invest"],
+    "ask": [
+      "mcp__t-invest__place_order",
+      "mcp__t-invest__cancel_order"
+    ]
+  }
+}
+```
+
+`allow` на весь сервер убирает промпты по read-only tools, а торговые будут спрашивать
+всегда — в том числе защищает от случайного «don't ask again».
+
 ## Конфигурация
 
 | Переменная | Значение | Описание |
