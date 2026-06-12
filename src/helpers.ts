@@ -1,9 +1,10 @@
 import type { Quotation, MoneyValue } from "@tinkoff/invest-js";
 
-/** Quotation / MoneyValue → number */
+/** Quotation / MoneyValue → number (rounded to 9 dp — kills float artifacts of units + nano/1e9) */
 export function toNumber(q: Quotation | MoneyValue | undefined | null): number {
   if (!q) return 0;
-  return (q.units ?? 0) + (q.nano ?? 0) / 1_000_000_000;
+  const v = (q.units ?? 0) + (q.nano ?? 0) / 1_000_000_000;
+  return Number(v.toFixed(9));
 }
 
 /** number → Quotation */
@@ -20,11 +21,26 @@ export function toMoneyValue(value: number, currency: string): MoneyValue {
   return { ...toQuotation(value), currency };
 }
 
-/** Date/string → ISO-like string in Moscow time (no Z suffix) */
+/** Date/string → ISO string in Moscow time with explicit offset */
 export function toMsk(d: Date | string | undefined | null): string {
   if (!d) return "";
   const date = typeof d === "string" ? new Date(d) : d;
-  return date.toLocaleString("sv-SE", { timeZone: "Europe/Moscow" }).replace(" ", "T");
+  return date.toLocaleString("sv-SE", { timeZone: "Europe/Moscow" }).replace(" ", "T") + "+03:00";
+}
+
+/** ts-proto enum decoder → readable label: enumLabel(accountTypeToJSON, 2, "ACCOUNT_TYPE_") → "TINKOFF_IIS" */
+export function enumLabel(
+  toJson: (v: number) => string,
+  value: number | undefined | null,
+  prefix: string,
+): string {
+  if (value == null) return "";
+  try {
+    const s = toJson(value);
+    return s.startsWith(prefix) ? s.slice(prefix.length) : s;
+  } catch {
+    return String(value);
+  }
 }
 
 /** ISO string → Date, with fallback for omitted params */

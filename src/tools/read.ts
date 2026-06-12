@@ -6,10 +6,22 @@ import {
   CandleInterval,
   InstrumentIdType,
   GetBondEventsRequest_EventType,
+  accountTypeToJSON,
+  accountStatusToJSON,
+  securityTradingStatusToJSON,
+  recommendationToJSON,
+  couponTypeToJSON,
+  getBondEventsRequest_EventTypeToJSON,
+  orderDirectionToJSON,
+  orderTypeToJSON,
+  orderExecutionReportStatusToJSON,
 } from "@tinkoff/invest-js";
 import { getClient } from "../client.js";
 import { getInstrumentRef } from "../instruments-cache.js";
-import { ok, fail, toNumber, toMsk, parseDate, daysFromNow } from "../helpers.js";
+import { ok, fail, toNumber, toMsk, parseDate, daysFromNow, enumLabel } from "../helpers.js";
+
+/** Fundamentals API returns 0 for missing indicators — expose as null to avoid fake zeros */
+const orNull = (x: number | undefined): number | null => (x ? x : null);
 
 const RO = {
   readOnlyHint: true,
@@ -73,7 +85,14 @@ export function registerReadTools(server: McpServer): void {
     async () => {
       try {
         const { accounts } = await getClient().users.getAccounts({});
-        return ok(accounts.map((a) => ({ id: a.id, name: a.name, type: a.type, status: a.status })));
+        return ok(
+          accounts.map((a) => ({
+            id: a.id,
+            name: a.name,
+            type: enumLabel(accountTypeToJSON, a.type, "ACCOUNT_TYPE_"),
+            status: enumLabel(accountStatusToJSON, a.status, "ACCOUNT_STATUS_"),
+          })),
+        );
       } catch (e) {
         return fail(e);
       }
@@ -252,7 +271,7 @@ export function registerReadTools(server: McpServer): void {
           lot: instrument.lot,
           exchange: instrument.exchange,
           instrumentType: instrument.instrumentType,
-          tradingStatus: instrument.tradingStatus,
+          tradingStatus: enumLabel(securityTradingStatusToJSON, instrument.tradingStatus, "SECURITY_TRADING_STATUS_"),
           countryOfRisk: instrument.countryOfRisk,
           countryOfRiskName: instrument.countryOfRiskName,
         });
@@ -266,7 +285,7 @@ export function registerReadTools(server: McpServer): void {
     "get_last_prices",
     {
       title: "Get Last Prices",
-      description: "Last known prices for a batch of instruments.",
+      description: "Last known prices for a batch of instruments. Response order mirrors the request; unknown UIDs come back with found:false.",
       inputSchema: {
         instrumentIds: z.array(z.string()).min(1).max(100).describe("Instrument UIDs"),
       },
@@ -277,12 +296,15 @@ export function registerReadTools(server: McpServer): void {
         const { lastPrices } = await getClient().marketdata.getLastPrices({
           instrumentId: instrumentIds,
         });
+        // API silently drops/empties unknown UIDs — key the response off the request instead
+        const byUid = new Map(lastPrices.filter((lp) => lp.instrumentUid).map((lp) => [lp.instrumentUid, lp]));
         return ok(
-          lastPrices.map((lp) => ({
-            instrumentUid: lp.instrumentUid,
-            price: toNumber(lp.price),
-            time: toMsk(lp.time),
-          })),
+          instrumentIds.map((id) => {
+            const lp = byUid.get(id);
+            return lp
+              ? { instrumentUid: id, found: true, price: toNumber(lp.price), time: toMsk(lp.time) }
+              : { instrumentUid: id, found: false };
+          }),
         );
       } catch (e) {
         return fail(e);
@@ -422,7 +444,7 @@ export function registerReadTools(server: McpServer): void {
             couponDate: toMsk(c.couponDate),
             payOneBond: toNumber(c.payOneBond),
             currency: c.payOneBond?.currency ?? "rub",
-            couponType: c.couponType,
+            couponType: enumLabel(couponTypeToJSON, c.couponType, "COUPON_TYPE_"),
             fixDate: toMsk(c.fixDate),
             couponStartDate: toMsk(c.couponStartDate),
             couponEndDate: toMsk(c.couponEndDate),
@@ -494,7 +516,7 @@ export function registerReadTools(server: McpServer): void {
         return ok(
           events.map((e) => ({
             eventDate: toMsk(e.eventDate),
-            eventType: e.eventType,
+            eventType: enumLabel(getBondEventsRequest_EventTypeToJSON, e.eventType, "EVENT_TYPE_"),
             eventTotalVol: toNumber(e.eventTotalVol),
             fixDate: toMsk(e.fixDate),
             rateDate: toMsk(e.rateDate),
@@ -511,7 +533,7 @@ export function registerReadTools(server: McpServer): void {
     "get_asset_fundamentals",
     {
       title: "Get Asset Fundamentals",
-      description: "Fundamental indicators for assets: market cap, P/E, P/B, EV/EBITDA, ROE/ROA/ROIC, margins, debt ratios, dividend yield, 52-week range. Takes assetUid (NOT instrument UID) — get it from get_instrument.",
+      description: "Fundamental indicators for assets: market cap, P/E, P/B, EV/EBITDA, ROE/ROA/ROIC, margins, debt ratios, dividend yield, 52-week range. Takes assetUid (NOT instrument UID) — get it from get_instrument. Indicators not applicable to the asset (e.g. EV/EBITDA for banks) are null.",
       inputSchema: {
         assetUids: z.array(z.string()).min(1).max(50).describe("Asset UIDs (assetUid field from get_instrument)"),
       },
@@ -526,33 +548,33 @@ export function registerReadTools(server: McpServer): void {
           fundamentals.map((f) => ({
             assetUid: f.assetUid,
             currency: f.currency,
-            marketCapitalization: f.marketCapitalization,
-            highPriceLast52Weeks: f.highPriceLast52Weeks,
-            lowPriceLast52Weeks: f.lowPriceLast52Weeks,
-            beta: f.beta,
-            freeFloat: f.freeFloat,
-            peRatioTtm: f.peRatioTtm,
-            priceToSalesTtm: f.priceToSalesTtm,
-            priceToBookTtm: f.priceToBookTtm,
-            priceToFreeCashFlowTtm: f.priceToFreeCashFlowTtm,
-            evToEbitdaMrq: f.evToEbitdaMrq,
-            netMarginMrq: f.netMarginMrq,
-            roe: f.roe,
-            roa: f.roa,
-            roic: f.roic,
-            totalDebtToEquityMrq: f.totalDebtToEquityMrq,
-            totalDebtToEbitdaMrq: f.totalDebtToEbitdaMrq,
-            currentRatioMrq: f.currentRatioMrq,
-            revenueTtm: f.revenueTtm,
-            ebitdaTtm: f.ebitdaTtm,
-            netIncomeTtm: f.netIncomeTtm,
-            epsTtm: f.epsTtm,
-            freeCashFlowTtm: f.freeCashFlowTtm,
-            dividendYieldDailyTtm: f.dividendYieldDailyTtm,
-            dividendRateTtm: f.dividendRateTtm,
-            dividendsPerShare: f.dividendsPerShare,
-            forwardAnnualDividendYield: f.forwardAnnualDividendYield,
-            sharesOutstanding: f.sharesOutstanding,
+            marketCapitalization: orNull(f.marketCapitalization),
+            highPriceLast52Weeks: orNull(f.highPriceLast52Weeks),
+            lowPriceLast52Weeks: orNull(f.lowPriceLast52Weeks),
+            beta: orNull(f.beta),
+            freeFloat: orNull(f.freeFloat),
+            peRatioTtm: orNull(f.peRatioTtm),
+            priceToSalesTtm: orNull(f.priceToSalesTtm),
+            priceToBookTtm: orNull(f.priceToBookTtm),
+            priceToFreeCashFlowTtm: orNull(f.priceToFreeCashFlowTtm),
+            evToEbitdaMrq: orNull(f.evToEbitdaMrq),
+            netMarginMrq: orNull(f.netMarginMrq),
+            roe: orNull(f.roe),
+            roa: orNull(f.roa),
+            roic: orNull(f.roic),
+            totalDebtToEquityMrq: orNull(f.totalDebtToEquityMrq),
+            totalDebtToEbitdaMrq: orNull(f.totalDebtToEbitdaMrq),
+            currentRatioMrq: orNull(f.currentRatioMrq),
+            revenueTtm: orNull(f.revenueTtm),
+            ebitdaTtm: orNull(f.ebitdaTtm),
+            netIncomeTtm: orNull(f.netIncomeTtm),
+            epsTtm: orNull(f.epsTtm),
+            freeCashFlowTtm: orNull(f.freeCashFlowTtm),
+            dividendYieldDailyTtm: orNull(f.dividendYieldDailyTtm),
+            dividendRateTtm: orNull(f.dividendRateTtm),
+            dividendsPerShare: orNull(f.dividendsPerShare),
+            forwardAnnualDividendYield: orNull(f.forwardAnnualDividendYield),
+            sharesOutstanding: orNull(f.sharesOutstanding),
           })),
         );
       } catch (e) {
@@ -579,7 +601,7 @@ export function registerReadTools(server: McpServer): void {
         return ok({
           consensus: consensus
             ? {
-                recommendation: consensus.recommendation,
+                recommendation: enumLabel(recommendationToJSON, consensus.recommendation, "RECOMMENDATION_"),
                 currency: consensus.currency,
                 currentPrice: toNumber(consensus.currentPrice),
                 consensusPrice: toNumber(consensus.consensus),
@@ -590,7 +612,7 @@ export function registerReadTools(server: McpServer): void {
             : null,
           targets: targets.map((t) => ({
             company: t.company,
-            recommendation: t.recommendation,
+            recommendation: enumLabel(recommendationToJSON, t.recommendation, "RECOMMENDATION_"),
             currency: t.currency,
             currentPrice: toNumber(t.currentPrice),
             targetPrice: toNumber(t.targetPrice),
@@ -659,9 +681,9 @@ export function registerReadTools(server: McpServer): void {
               instrumentUid: o.instrumentUid,
               ticker: ref?.ticker ?? "",
               name: ref?.name ?? "",
-              direction: o.direction,
-              orderType: o.orderType,
-              status: o.executionReportStatus,
+              direction: enumLabel(orderDirectionToJSON, o.direction, "ORDER_DIRECTION_"),
+              orderType: enumLabel(orderTypeToJSON, o.orderType, "ORDER_TYPE_"),
+              status: enumLabel(orderExecutionReportStatusToJSON, o.executionReportStatus, "EXECUTION_REPORT_STATUS_"),
               lotsRequested: o.lotsRequested,
               lotsExecuted: o.lotsExecuted,
               initialPrice: toNumber(o.initialSecurityPrice),

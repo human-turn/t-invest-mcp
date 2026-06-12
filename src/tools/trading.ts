@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { OrderDirection, OrderType, PriceType } from "@tinkoff/invest-js";
+import { OrderDirection, OrderType, PriceType, orderExecutionReportStatusToJSON } from "@tinkoff/invest-js";
 import { getClient, config } from "../client.js";
 import { getInstrumentRef } from "../instruments-cache.js";
-import { ok, fail, toNumber, toQuotation, toMsk, type ToolResult } from "../helpers.js";
+import { ok, fail, toNumber, toQuotation, toMsk, enumLabel, type ToolResult } from "../helpers.js";
 
 const CONFIRM_TIMEOUT_MS = 120_000;
 
@@ -108,7 +108,7 @@ export function registerTradingTools(server: McpServer): void {
         });
         return ok({
           orderId: r.orderId,
-          status: r.executionReportStatus,
+          status: enumLabel(orderExecutionReportStatusToJSON, r.executionReportStatus, "EXECUTION_REPORT_STATUS_"),
           lotsRequested: r.lotsRequested,
           lotsExecuted: r.lotsExecuted,
           initialOrderPrice: toNumber(r.initialOrderPrice),
