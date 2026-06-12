@@ -37,7 +37,9 @@ MCP-клиент) к [T-Invest API](https://developer.tinkoff.ru/invest/). См�
      -- npx -y t-invest-mcp
    ```
 
-   Для Claude Desktop — тот же блок в Settings → Developer → Edit Config:
+   Для Claude Desktop тот же блок добавляется в Settings → Developer → Edit Config.
+   Этот JSON подходит и любому другому MCP-клиенту (Cursor, VS Code, Windsurf и др.) —
+   меняется только место, куда его вписать:
 
    ```json
    {
