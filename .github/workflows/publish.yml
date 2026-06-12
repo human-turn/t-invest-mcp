@@ -19,8 +19,5 @@ jobs:
           node-version: 24.x
           registry-url: https://registry.npmjs.org
       - run: npm ci
-      # prepublishOnly соберёт dist; первый релиз — по NPM_TOKEN, после настройки
-      # Trusted Publisher на npmjs.com строку env удалить (перейдёт на OIDC)
+      # prepublishOnly соберёт dist; аутентификация — OIDC trusted publishing, токены не нужны
       - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

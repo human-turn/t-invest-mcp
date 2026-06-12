@@ -40,19 +40,13 @@ Claude: [get_candles → data/sber.csv, 1353 строки] Строю графи
 1. **Токен.** В [настройках Т-Инвестиций](https://www.tbank.ru/invest/settings/api/)
    выпусти токен «только чтение». «Подтверждение сделок кодом» должно быть выключено.
    Токен показывается один раз; живёт 3 месяца с последнего использования.
-2. **Установка:**
-
-   ```bash
-   git clone https://github.com/human-turn/t-invest-mcp && cd t-invest-mcp
-   npm install && npm run build
-   ```
-
-3. **Подключение к Claude Code:**
+2. **Подключение к Claude Code** — одной командой, установка не нужна
+   (пакет [`t-invest-mcp`](https://www.npmjs.com/package/t-invest-mcp) подтянется из npm):
 
    ```bash
    claude mcp add t-invest \
      -e TINKOFF_API_TOKEN=<ваш-токен> \
-     -- node /path/to/t-invest-mcp/dist/index.js
+     -- npx -y t-invest-mcp
    ```
 
    Для Claude Desktop — тот же блок в Settings → Developer → Edit Config:
@@ -61,13 +55,23 @@ Claude: [get_candles → data/sber.csv, 1353 строки] Строю графи
    {
      "mcpServers": {
        "t-invest": {
-         "command": "node",
-         "args": ["/path/to/t-invest-mcp/dist/index.js"],
+         "command": "npx",
+         "args": ["-y", "t-invest-mcp"],
          "env": { "TINKOFF_API_TOKEN": "<ваш-токен>" }
        }
      }
    }
    ```
+
+   <details><summary>Вариант из исходников (для разработки)</summary>
+
+   ```bash
+   git clone https://github.com/human-turn/t-invest-mcp && cd t-invest-mcp
+   npm install && npm run build
+   # далее в командах выше вместо "npx -y t-invest-mcp" → "node /path/to/t-invest-mcp/dist/index.js"
+   ```
+
+   </details>
 
    В такой минимальной конфигурации сервер **строго read-only**: смотреть и
    анализировать можно всё, торговать — нельзя (торговые операции даже не
@@ -81,7 +85,7 @@ Claude: [get_candles → data/sber.csv, 1353 строки] Строю графи
    | `TINKOFF_OUTPUT_DIR=<путь>` | Куда складывать [файловые выгрузки](#выгрузка-в-файл--детали) (по умолчанию — папка проекта) |
    | `TINKOFF_CONFIRM=off` | Отключить диалог подтверждения сделок — только для песочницы |
 
-4. **Проверка:** спроси «покажи мои счета и портфель».
+3. **Проверка:** спроси «покажи мои счета и портфель».
 
 ## Готовое из коробки: ритуалы
 
