@@ -16,7 +16,7 @@ import {
   orderTypeToJSON,
   orderExecutionReportStatusToJSON,
 } from "@tinkoff/invest-js";
-import { getClient } from "../client.js";
+import { getClient, config } from "../client.js";
 import { getInstrumentRef } from "../instruments-cache.js";
 import { ok, fail, toNumber, toMsk, parseDate, daysFromNow, enumLabel } from "../helpers.js";
 
@@ -83,11 +83,15 @@ function normalizeOpType(type: string | number): string {
 }
 
 export function registerReadTools(server: McpServer): void {
+  const sandboxNote = config.sandbox
+    ? " SANDBOX MODE: every account returned here is a sandbox account regardless of its type (type reflects the account kind — TINKOFF is a regular brokerage account, TINKOFF_IIS an individual investment account; there is no special SANDBOX type)."
+    : "";
+
   server.registerTool(
     "get_accounts",
     {
       title: "Get Accounts",
-      description: "List all brokerage accounts of the token owner (id, name, type, status). Start here: accountId is required by portfolio/operations/orders tools.",
+      description: `List all brokerage accounts of the token owner (id, name, type, status). Start here: accountId is required by portfolio/operations/orders tools.${sandboxNote}`,
       inputSchema: {},
       annotations: RO,
     },
