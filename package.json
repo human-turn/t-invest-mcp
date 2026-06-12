@@ -1,6 +1,6 @@
 {
   "name": "t-invest-mcp",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "MCP server for T-Invest API (Tinkoff Investments): portfolio, market data, dividends, bonds, fundamentals, optional trading and sandbox",
   "type": "module",
   "main": "dist/index.js",
