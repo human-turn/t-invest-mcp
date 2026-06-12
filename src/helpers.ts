@@ -83,3 +83,58 @@ export function fail(error: unknown): ToolResult {
   if (typeof code === "number" && GRPC_HINTS[code]) msg += ` — ${GRPC_HINTS[code]}`;
   return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
 }
+
+export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** Retry on gRPC RESOURCE_EXHAUSTED (code 8 / 80002 request limit) with a flat backoff */
+export async function withRateLimitRetry<T>(fn: () => Promise<T>, retries = 2, backoffMs = 30_000): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if ((e as { code?: unknown } | null)?.code === 8 && attempt < retries) {
+        await sleep(backoffMs);
+        continue;
+      }
+      throw e;
+    }
+  }
+}
+
+/** Minimal shape of the SDK's request handler `extra` we need for progress */
+export interface ProgressCtx {
+  _meta?: { progressToken?: string | number };
+  sendNotification: (n: {
+    method: "notifications/progress";
+    params: { progressToken: string | number; progress: number; total?: number; message?: string };
+  }) => Promise<void>;
+}
+
+/** Best-effort MCP progress notification (no-op when the client sent no progressToken) */
+export async function notifyProgress(
+  extra: ProgressCtx,
+  progress: number,
+  total: number | undefined,
+  message: string,
+): Promise<void> {
+  const progressToken = extra._meta?.progressToken;
+  if (progressToken == null) return;
+  try {
+    await extra.sendNotification({
+      method: "notifications/progress",
+      params: { progressToken, progress, ...(total != null ? { total } : {}), message },
+    });
+  } catch {
+    // progress is cosmetic — never fail the call
+  }
+}
+
+/** Split [from, to] into chunks of at most maxDays (for GetCandles range limits) */
+export function computeChunks(from: Date, to: Date, maxDays: number): Array<{ from: Date; to: Date }> {
+  const chunks: Array<{ from: Date; to: Date }> = [];
+  const step = maxDays * 86_400_000;
+  for (let t = from.getTime(); t < to.getTime(); t += step) {
+    chunks.push({ from: new Date(t), to: new Date(Math.min(t + step, to.getTime())) });
+  }
+  return chunks;
+}

@@ -29,6 +29,7 @@
     "@bufbuild/protobuf": "^2.12.0",
     "@modelcontextprotocol/sdk": "^1.12.0",
     "@tinkoff/invest-js": "^1.27.1-RC4",
+    "fflate": "^0.8.3",
     "zod": "^3.24.0"
   },
   "devDependencies": {
