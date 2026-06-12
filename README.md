@@ -217,7 +217,10 @@ Read-only (всегда):
 | `get_forecasts` | Консенсус-прогнозы и таргеты аналитиков |
 | `get_trading_schedules` | Расписание торгов на неделю |
 | `get_active_orders` | Активные заявки |
-| `download_history_archive` | Годовые архивы минутных свечей → единый CSV (нужен боевой токен) |
+| `download_history_archive` | Годовые архивы минутных свечей (1 запрос = 1 год) → единый CSV |
+| `get_history_archive_years` | Какие годы архивов доступны по инструменту (и их размер) |
+| `download_trades_archive` | Обезличенные сделки за торговый день → CSV |
+| `get_server_info` | Диагностика сервера: версия, режимы, окружение (для фидбэка) |
 
 Торговые (`TINKOFF_ALLOW_TRADING=true`): `place_order`, `cancel_order`.
 Песочница (`TINKOFF_SANDBOX=true`): `sandbox_open_account`, `sandbox_pay_in`, `sandbox_close_account`.
