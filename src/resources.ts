@@ -4,8 +4,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 const PORTFOLIO_TARGET_EXAMPLE = {
   $comment:
-    "Эталон portfolio-target.json: скопируйте в корень проекта и поправьте значения. targets/byTicker — проценты; goals — массив, целей может быть несколько.",
-  targets: { shares: 60, bonds: 30, cash: 10 },
+    "Эталон portfolio-target.json: скопируйте в корень проекта и поправьте значения. targets/byTicker — проценты, классы targets должны суммироваться к 100 (etf — отдельный класс; фонды денежного рынка типа LQDT при желании относите к cash, фиксируя это в byTicker). goals — массив, целей может быть несколько.",
+  targets: { shares: 55, bonds: 30, etf: 10, cash: 5 },
   byTicker: { SBER: 10 },
   goals: [
     {

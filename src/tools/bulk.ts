@@ -35,7 +35,14 @@ async function fetchYear(instrumentId: string, year: number): Promise<Uint8Array
         await sleep(60_000);
         continue;
       }
-      if (!res.ok) throw new Error(`history-data ${year}: HTTP ${res.status} (${url})`);
+      if (!res.ok) {
+        // the endpoint answers 500 (not 401) to unauthorized tokens — most commonly a sandbox token
+        const hint =
+          res.status === 500
+            ? " — the archive endpoint returns 500 for tokens without archive access (sandbox tokens have none) and for unknown instruments; use a production token and a valid UID/FIGI"
+            : "";
+        throw new Error(`history-data ${year}: HTTP ${res.status} (${url})${hint}`);
+      }
       return new Uint8Array(await res.arrayBuffer());
     }
   }
@@ -50,7 +57,7 @@ export function registerBulkTools(server: McpServer): void {
     {
       title: "Download Minute-Candle History Archive",
       description:
-        "Bulk-download MINUTE candles for whole years via the REST archive endpoint (1 HTTP request = 1 year) and merge them into a single CSV file in the output root. Far cheaper than get_candles for long minute history. Columns: instrumentUid;timeUtc;open;close;high;low;volume. Archives are rebuilt nightly (no current day). Years with no data are skipped and listed in the summary.",
+        "Bulk-download MINUTE candles for whole years via the REST archive endpoint (1 HTTP request = 1 year) and merge them into a single CSV file in the output root. Far cheaper than get_candles for long minute history. Columns: instrumentUid;timeUtc;open;close;high;low;volume. Archives are rebuilt nightly (no current day). Years with no data are skipped and listed in the summary. REQUIRES a PRODUCTION token: sandbox tokens have no archive access (endpoint answers HTTP 500).",
       inputSchema: {
         instrumentId: z.string().describe("Instrument UID (or FIGI) from find_instrument"),
         yearFrom: z.number().int().min(2017).describe("First year to download"),
