@@ -14,6 +14,11 @@ const THROTTLE_MS = 2_100; // archive endpoint limit: 30 files/min per IP
 
 let archiveHost: string | undefined; // first host that answered — cached for the process lifetime
 
+/** Diagnostics for get_server_info */
+export function getArchiveHost(): string | undefined {
+  return archiveHost;
+}
+
 async function fetchYear(instrumentId: string, year: number): Promise<Uint8Array | null> {
   const hosts = archiveHost ? [archiveHost] : ARCHIVE_HOSTS;
   const failures: string[] = [];

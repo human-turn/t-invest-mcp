@@ -16,18 +16,21 @@ import { registerReadTools } from "./tools/read.js";
 import { registerTradingTools } from "./tools/trading.js";
 import { registerSandboxTools } from "./tools/sandbox.js";
 import { registerBulkTools } from "./tools/bulk.js";
+import { registerInfoTools } from "./tools/info.js";
 import { registerPrompts } from "./prompts.js";
 import { registerResources } from "./resources.js";
+import { VERSION } from "./version.js";
 
 if (!config.token) {
   console.error("ERROR: TINKOFF_API_TOKEN environment variable is required");
   process.exit(1);
 }
 
-const server = new McpServer({ name: "t-invest-mcp-server", version: "0.1.0" });
+const server = new McpServer({ name: "t-invest-mcp-server", version: VERSION });
 
 registerReadTools(server);
 registerBulkTools(server);
+registerInfoTools(server);
 registerPrompts(server);
 registerResources(server);
 if (config.allowTrading) registerTradingTools(server);
