@@ -1,0 +1,39 @@
+{
+  "name": "t-invest-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for T-Invest API (Tinkoff Investments): portfolio, market data, dividends, bonds, fundamentals, optional trading and sandbox",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "t-invest-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "tinkoff",
+    "t-invest",
+    "t-bank",
+    "investments"
+  ],
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.12.0",
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "@tinkoff/invest-js": "^1.27.1-RC4",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
