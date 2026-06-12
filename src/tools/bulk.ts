@@ -168,7 +168,15 @@ export function registerBulkTools(server: McpServer): void {
 
         const rel = outputPath ?? `history_1min_${instrumentId}_${yearFrom}-${lastYear}.csv`;
         const { savedTo, bytes } = await writeRaw(rel, parts.join("\n") + "\n");
-        return ok({ savedTo, format: "csv", records, bytes, years, skippedYears, header: CANDLE_CSV_HEADER });
+        return ok({
+          savedTo,
+          format: "csv",
+          records,
+          bytes,
+          years: years.filter((y) => !skippedYears.includes(y)), // only the years actually downloaded
+          skippedYears,
+          header: CANDLE_CSV_HEADER,
+        });
       } catch (e) {
         return fail(e);
       }
