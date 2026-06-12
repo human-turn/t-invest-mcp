@@ -205,7 +205,8 @@ export function registerReadTools(server: McpServer): void {
         const totalPortfolio = toNumber(response.totalAmountPortfolio);
         // API returns portfolio-level expectedYield as a percentage (11.78 = +11.78%)
         const yieldPercent = toNumber(response.expectedYield);
-        const yieldRub = yieldPercent !== 0 ? (totalPortfolio * yieldPercent) / (100 + yieldPercent) : 0;
+        const yieldRub =
+          yieldPercent !== 0 ? Math.round((totalPortfolio * yieldPercent * 100) / (100 + yieldPercent)) / 100 : 0;
 
         const data = {
           totalShares: toNumber(response.totalAmountShares),

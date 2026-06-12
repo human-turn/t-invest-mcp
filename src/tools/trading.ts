@@ -26,21 +26,16 @@ async function confirmTrade(server: McpServer, message: string): Promise<ToolRes
     );
   }
 
+  // No form fields: the Accept button itself is the confirmation (one click, no hidden checkbox)
   const res = await server.server.elicitInput(
     {
       message,
-      requestedSchema: {
-        type: "object",
-        properties: {
-          confirm: { type: "boolean", title: "Подтверждаю сделку" },
-        },
-        required: ["confirm"],
-      },
+      requestedSchema: { type: "object", properties: {} },
     },
     { timeout: CONFIRM_TIMEOUT_MS },
   );
 
-  if (res.action !== "accept" || res.content?.confirm !== true) {
+  if (res.action !== "accept") {
     return fail(new Error(`Order not confirmed by user (${res.action})`));
   }
   return null;

@@ -5,23 +5,43 @@ import { config } from "../client.js";
 import { ok, fail, sleep, notifyProgress, type ProgressCtx } from "../helpers.js";
 import { writeRaw } from "../output.js";
 
-const ARCHIVE_URL = "https://invest-public-api.tbank.ru/history-data";
+const ARCHIVE_HOSTS = [
+  "https://invest-public-api.tbank.ru",
+  "https://invest-public-api.tinkoff.ru", // legacy host — reachable from some networks where tbank.ru is not
+];
 const CSV_HEADER = "instrumentUid;timeUtc;open;close;high;low;volume";
 const THROTTLE_MS = 2_100; // archive endpoint limit: 30 files/min per IP
 
+let archiveHost: string | undefined; // first host that answered — cached for the process lifetime
+
 async function fetchYear(instrumentId: string, year: number): Promise<Uint8Array | null> {
-  for (let attempt = 0; ; attempt++) {
-    const res = await fetch(`${ARCHIVE_URL}?instrument_id=${encodeURIComponent(instrumentId)}&year=${year}`, {
-      headers: { Authorization: `Bearer ${config.token}` },
-    });
-    if (res.status === 404) return null; // no archive for this year
-    if (res.status === 429 && attempt < 2) {
-      await sleep(60_000);
-      continue;
+  const hosts = archiveHost ? [archiveHost] : ARCHIVE_HOSTS;
+  const failures: string[] = [];
+
+  for (const host of hosts) {
+    const url = `${host}/history-data?instrument_id=${encodeURIComponent(instrumentId)}&year=${year}`;
+    for (let attempt = 0; ; attempt++) {
+      let res: Response;
+      try {
+        res = await fetch(url, { headers: { Authorization: `Bearer ${config.token}` } });
+      } catch (e) {
+        const cause = (e as { cause?: { message?: string } }).cause?.message ?? (e as Error).message;
+        failures.push(`GET ${url} — ${cause}`);
+        break; // network-level failure: try the next host
+      }
+      archiveHost = host;
+      if (res.status === 404) return null; // no archive for this year
+      if (res.status === 429 && attempt < 2) {
+        await sleep(60_000);
+        continue;
+      }
+      if (!res.ok) throw new Error(`history-data ${year}: HTTP ${res.status} (${url})`);
+      return new Uint8Array(await res.arrayBuffer());
     }
-    if (!res.ok) throw new Error(`history-data ${year}: HTTP ${res.status}`);
-    return new Uint8Array(await res.arrayBuffer());
   }
+  throw new Error(
+    `archive request failed for year ${year}: ${failures.join("; ")} — check network/proxy access to the archive host`,
+  );
 }
 
 export function registerBulkTools(server: McpServer): void {

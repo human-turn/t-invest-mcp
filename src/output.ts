@@ -85,7 +85,8 @@ export async function deliver(
   if (format === "csv" && !rows) {
     throw new Error("csv is not supported for this tool's nested response — use outputFormat: json");
   }
-  const body = format === "csv" ? toCsv(rows as Record<string, unknown>[]) : JSON.stringify(data, null, 2);
+  const body =
+    format === "csv" ? toCsv(rows as Record<string, unknown>[]) + "\n" : JSON.stringify(data, null, 2) + "\n";
   const { savedTo, bytes } = await writeRaw(out.outputPath, body);
 
   return ok({
