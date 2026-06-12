@@ -23,6 +23,15 @@ import { ok, fail, toNumber, toMsk, parseDate, daysFromNow, enumLabel } from "..
 /** Fundamentals API returns 0 for missing indicators — expose as null to avoid fake zeros */
 const orNull = (x: number | undefined): number | null => (x ? x : null);
 
+/** Bonds are quoted in % of nominal, futures in points — surface the unit next to prices */
+async function priceUnit(uid: string): Promise<"percent_of_nominal" | "points" | "currency" | undefined> {
+  const ref = await getInstrumentRef(uid);
+  if (!ref) return undefined;
+  if (ref.instrumentType === "bond") return "percent_of_nominal";
+  if (ref.instrumentType === "futures") return "points";
+  return "currency";
+}
+
 const RO = {
   readOnlyHint: true,
   destructiveHint: false,
@@ -247,7 +256,7 @@ export function registerReadTools(server: McpServer): void {
     "get_instrument",
     {
       title: "Get Instrument Details",
-      description: "Instrument card by UID: ticker, ISIN, currency, lot size, exchange, trading status, country of risk, assetUid (needed for get_asset_fundamentals).",
+      description: "Instrument card by UID: ticker, ISIN, currency, lot size, exchange, trading status, country of risk, assetUid (needed for get_asset_fundamentals). For bonds also returns a bond block: nominal, maturity, coupon frequency, accrued interest — bond market prices are quoted in % of this nominal.",
       inputSchema: {
         instrumentId: z.string().describe("Instrument UID from find_instrument or portfolio"),
       },
@@ -260,7 +269,7 @@ export function registerReadTools(server: McpServer): void {
           id: instrumentId,
         });
         if (!instrument) return ok({ found: false });
-        return ok({
+        const card: Record<string, unknown> = {
           uid: instrument.uid,
           assetUid: instrument.assetUid,
           ticker: instrument.ticker,
@@ -274,7 +283,26 @@ export function registerReadTools(server: McpServer): void {
           tradingStatus: enumLabel(securityTradingStatusToJSON, instrument.tradingStatus, "SECURITY_TRADING_STATUS_"),
           countryOfRisk: instrument.countryOfRisk,
           countryOfRiskName: instrument.countryOfRiskName,
-        });
+        };
+
+        if (instrument.instrumentType === "bond") {
+          const { instrument: bond } = await getClient().instruments.bondBy({
+            idType: InstrumentIdType.INSTRUMENT_ID_TYPE_UID,
+            id: instrumentId,
+          });
+          if (bond) {
+            card.bond = {
+              nominal: toNumber(bond.nominal),
+              nominalCurrency: bond.nominal?.currency ?? "",
+              accruedInterest: toNumber(bond.aciValue),
+              maturityDate: toMsk(bond.maturityDate),
+              couponQuantityPerYear: bond.couponQuantityPerYear,
+              floatingCouponFlag: bond.floatingCouponFlag,
+              amortizationFlag: bond.amortizationFlag,
+            };
+          }
+        }
+        return ok(card);
       } catch (e) {
         return fail(e);
       }
@@ -285,7 +313,7 @@ export function registerReadTools(server: McpServer): void {
     "get_last_prices",
     {
       title: "Get Last Prices",
-      description: "Last known prices for a batch of instruments. Response order mirrors the request; unknown UIDs come back with found:false.",
+      description: "Last known prices for a batch of instruments. Response order mirrors the request; unknown UIDs come back with found:false. priceUnit flags the quote unit: bonds are quoted in % of nominal (see get_instrument bond.nominal), futures in points.",
       inputSchema: {
         instrumentIds: z.array(z.string()).min(1).max(100).describe("Instrument UIDs"),
       },
@@ -299,12 +327,20 @@ export function registerReadTools(server: McpServer): void {
         // API silently drops/empties unknown UIDs — key the response off the request instead
         const byUid = new Map(lastPrices.filter((lp) => lp.instrumentUid).map((lp) => [lp.instrumentUid, lp]));
         return ok(
-          instrumentIds.map((id) => {
-            const lp = byUid.get(id);
-            return lp
-              ? { instrumentUid: id, found: true, price: toNumber(lp.price), time: toMsk(lp.time) }
-              : { instrumentUid: id, found: false };
-          }),
+          await Promise.all(
+            instrumentIds.map(async (id) => {
+              const lp = byUid.get(id);
+              return lp
+                ? {
+                    instrumentUid: id,
+                    found: true,
+                    price: toNumber(lp.price),
+                    priceUnit: await priceUnit(id),
+                    time: toMsk(lp.time),
+                  }
+                : { instrumentUid: id, found: false };
+            }),
+          ),
         );
       } catch (e) {
         return fail(e);
@@ -344,6 +380,7 @@ export function registerReadTools(server: McpServer): void {
         return ok({
           total: mapped.length,
           truncated: mapped.length > MAX_CANDLES,
+          priceUnit: await priceUnit(instrumentId),
           candles: mapped.slice(-MAX_CANDLES),
         });
       } catch (e) {
@@ -356,7 +393,7 @@ export function registerReadTools(server: McpServer): void {
     "get_order_book",
     {
       title: "Get Order Book",
-      description: "Order book (bids/asks) for an instrument, with last/close price and trading limits.",
+      description: "Order book (bids/asks) for an instrument, with last/close price and trading limits. priceUnit flags the quote unit: bonds are quoted in % of nominal (see get_instrument bond.nominal), futures in points.",
       inputSchema: {
         instrumentId: z.string().describe("Instrument UID"),
         depth: z.number().int().min(1).max(50).default(10),
@@ -368,6 +405,7 @@ export function registerReadTools(server: McpServer): void {
         const r = await getClient().marketdata.getOrderBook({ instrumentId, depth });
         return ok({
           depth: r.depth,
+          priceUnit: await priceUnit(instrumentId),
           lastPrice: toNumber(r.lastPrice),
           closePrice: toNumber(r.closePrice),
           limitUp: toNumber(r.limitUp),

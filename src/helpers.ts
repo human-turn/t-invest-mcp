@@ -37,9 +37,10 @@ export function enumLabel(
   if (value == null) return "";
   try {
     const s = toJson(value);
+    if (s === "UNRECOGNIZED") return `UNKNOWN_${value}`; // keep the raw code visible
     return s.startsWith(prefix) ? s.slice(prefix.length) : s;
   } catch {
-    return String(value);
+    return `UNKNOWN_${value}`;
   }
 }
 
