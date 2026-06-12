@@ -22,16 +22,16 @@ Unit-тестов пока нет. Смоук-тест — JSON-RPC по stdio (
   | TINKOFF_API_TOKEN=fake node dist/index.js
 ```
 
-Ожидаемо: 19 read-tools (в т.ч. `get_server_info`, `download_history_archive`);
-с `TINKOFF_ALLOW_TRADING=true` +2, с `TINKOFF_SANDBOX=true` +3. Prompts: 15.
-Реальные проверки — только с sandbox-токеном.
+Ожидаемо: 20 tools без флагов (16 read из `read.ts` + 3 архивных из `bulk.ts` +
+`get_server_info`); с `TINKOFF_ALLOW_TRADING=true` +2, с `TINKOFF_SANDBOX=true` +3.
+Prompts: 15. Реальные проверки — только с sandbox-токеном.
 
 ## Структура
 
 | Файл | Назначение |
 |---|---|
 | `src/index.ts` | Точка входа: регистрация tools/prompts/resources по env-флагам |
-| `src/client.ts` | `TTechApiClient` + sandbox-прокси (подмена users/operations/orders) + `config` из env |
+| `src/client.ts` | `TTechApiClient` + fail-closed sandbox-прокси (users/operations/orders) + `config` из env |
 | `src/helpers.ts` | Quotation→number, toMsk, enumLabel, ретраи rate-limit, MCP progress, chunking |
 | `src/output.ts` | Файловые выгрузки `outputPath`: path-guard, CSV, summary |
 | `src/instruments-cache.ts` | Мемо-кэш uid→тикер/имя/лот (обогащение ответов) |
@@ -51,11 +51,17 @@ Unit-тестов пока нет. Смоук-тест — JSON-RPC по stdio (
 2. **Подтверждение сделок**: перед `postOrder`/`cancelOrder` — elicitation-диалог
    человеку; клиент без поддержки elicitation получает отказ (fail-closed).
    Отключение только явным `TINKOFF_CONFIRM=off`.
-3. **Файлы — только внутри output root** (`TINKOFF_OUTPUT_DIR`/cwd): realpath-проверка
-   от `../` и симлинк-эскейпов в `output.ts` обязана сохраняться.
-4. **Токен** — только из env; не логировать, не включать в ответы tools, ресурсы
+3. **Файлы — только внутри output root** (`TINKOFF_OUTPUT_DIR`/cwd): запись идёт
+   ТОЛЬКО через хелперы `output.ts` (`deliver`/`writeRaw`/`createSafeWriter`), не
+   сырой `fs`. Они отбивают `../`, симлинк-эскейп родителя и запись ЧЕРЕЗ симлинк
+   на финальном компоненте — эти проверки обязаны сохраняться.
+4. **Sandbox-прокси fail-closed**: в sandbox-режиме `users`/`operations`/`orders` —
+   это `Proxy`, где разрешён только явно подменённый набор методов, остальные
+   бросают ошибку (а не уходят молча в прод-счёт). Добавляешь tool, зовущий новый
+   метод этих сервисов → добавь sandbox-маппинг в `client.ts`, иначе он упадёт в sandbox.
+5. **Токен** — только из env; не логировать, не включать в ответы tools, ресурсы
    и фидбэк-репорты (`get_server_info` намеренно его не отдаёт).
-5. Prompt-рецепты **не исполняют сделки** — только планы; исполнение требует явной
+6. Prompt-рецепты **не исполняют сделки** — только планы; исполнение требует явной
    команды пользователя и проходит через п. 2.
 
 ## Конвенции кода
@@ -65,18 +71,30 @@ Unit-тестов пока нет. Смоук-тест — JSON-RPC по stdio (
   вычисляемые рубли — до копеек; цены облигаций приходят в % номинала — отдавай
   `priceUnit` рядом с ценой.
 - Enum'ы API → строки через `*ToJSON` из SDK + `enumLabel()` (неизвестный код →
-  `UNKNOWN_<код>`, информацию не терять).
-- Время → `toMsk()` с явным offset `+03:00`.
+  `UNKNOWN_<код>`, информацию не терять). Ручные карты кодов не плодить — есть
+  `operationTypeToJSON` и т.п.
+- Время → `toMsk()` (отдаёт реальный исторический offset МСК, не всегда `+03:00`;
+  невалидная дата → пустая строка).
+- Резолв инструмента: `getInstrumentRef()` — best-effort (null и на not-found, и на
+  ошибке API; для обогащения); `resolveInstrumentRef()` — строгий (бросает ошибку
+  API, null только на genuine not-found; когда ошибка должна всплыть пользователю).
 - Каждый tool: тело в `try/catch` → `fail(e)` (хинты по gRPC-кодам уже в `fail`);
   описание на английском, с зависимостями («assetUid ← get_instrument») и единицами.
 - Read-tools принимают `outputPath`/`outputFormat` (спред `...outputParams`) и
   отвечают через `deliver(data, rows, out, extras)`; rows = плоский массив для CSV.
-- Длинные операции: пагинация/чанкование + `notifyProgress()`; внешние вызовы —
-  через `withRateLimitRetry()`.
+- Длинные операции: пагинация/чанкование + `notifyProgress()`; внешние gRPC —
+  через `withRateLimitRetry()`. Параллельное обогащение (портфель/заявки/цены) —
+  через `mapPool(items, 8, fn)`, не голый `Promise.all` (лимит 200/мин instruments).
+- Чанкование свечей: границы чанков общие (`chunk[i].to === chunk[i+1].from`), а
+  GetCandles inclusive по `to` → при склейке дедуп по времени обязателен.
 - Новые slash-команды: рецепт — функция в `recipes` (один источник правды),
   регистрация отдельно; зонтичные команды собирают те же рецепты через `umbrella()`.
 - Известная особенность SDK `@tinkoff/invest-js`: метод `bondBy` (не `getBondBy`);
   незадекларированная зависимость `@bufbuild/protobuf` — уже в package.json, не удалять.
+- REST-архивы (`bulk.ts`): параметр `instrumentId` (camelCase!) и ТОЛЬКО UID;
+  токен эндпоинту не нужен (шлём для совместимости); HTTP 500 = кривые параметры,
+  не токен; 404 = нет данных за год. Запросы — через единый `archiveRequest()`
+  (ретрай 429 + фоллбэк хостов tbank↔tinkoff + честная диагностика статусов).
 
 ## Релизы
 
