@@ -55,7 +55,12 @@ async function archiveRequest(pathAndQuery: string, label: string): Promise<Resp
     for (let attempt = 0; ; attempt++) {
       let res: Response;
       try {
-        res = await fetch(url, { headers: { Authorization: `Bearer ${config.token}` } });
+        // Force gzip: the archive hosts may answer with `Content-Encoding: zstd`, and Node's
+        // built-in fetch (undici) decodes only the first zstd frame — the body arrives
+        // truncated and JSON parsing fails (see issue #1).
+        res = await fetch(url, {
+          headers: { Authorization: `Bearer ${config.token}`, "Accept-Encoding": "gzip" },
+        });
       } catch (e) {
         const cause = (e as { cause?: { message?: string } }).cause?.message ?? (e as Error).message;
         failures.push(`${url}: ${cause}`);
